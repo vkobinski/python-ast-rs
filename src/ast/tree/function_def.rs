@@ -1,20 +1,51 @@
 use log::debug;
 use proc_macro2::TokenStream;
 use pyo3::FromPyObject;
-use quote::{format_ident, quote};
-use serde::{Deserialize, Serialize};
+use quote::{ format_ident, quote };
+use serde::{ Deserialize, Serialize };
 
 use crate::{
-    CodeGen, CodeGenContext, ExprType, Object, ParameterList, PythonOptions, Statement,
-    StatementType, SymbolTableNode, SymbolTableScopes,
+    CodeGen,
+    CodeGenContext,
+    ExprType,
+    Object,
+    ParameterList,
+    PythonOptions,
+    Statement,
+    StatementType,
+    SymbolTableNode,
+    SymbolTableScopes,
 };
 
-#[derive(Clone, Debug, FromPyObject, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct FunctionDef {
     pub name: String,
     pub args: ParameterList,
     pub body: Vec<Statement>,
     pub decorator_list: Vec<String>,
+}
+
+impl<'py> ::pyo3::FromPyObject<'py> for FunctionDef {
+    fn extract_bound(obj: &::pyo3::Bound<'py, ::pyo3::PyAny>) -> ::pyo3::PyResult<Self> {
+        ::std::result::Result::Ok(FunctionDef {
+            name: ::pyo3::impl_::frompyobject::extract_struct_field(
+                &::pyo3::types::PyAnyMethods::getattr(obj, ::pyo3::intern!(obj.py(), "name"))?,
+                "FunctionDef",
+                "name"
+            )?,
+            args: ::pyo3::impl_::frompyobject::extract_struct_field(
+                &::pyo3::types::PyAnyMethods::getattr(obj, ::pyo3::intern!(obj.py(), "args"))?,
+                "FunctionDef",
+                "args"
+            )?,
+            body: ::pyo3::impl_::frompyobject::extract_struct_field(
+                &::pyo3::types::PyAnyMethods::getattr(obj, ::pyo3::intern!(obj.py(), "body"))?,
+                "FunctionDef",
+                "body"
+            )?,
+            decorator_list: vec![],
+        })
+    }
 }
 
 impl CodeGen for FunctionDef {
@@ -24,10 +55,7 @@ impl CodeGen for FunctionDef {
 
     fn find_symbols(self, symbols: Self::SymbolTable) -> Self::SymbolTable {
         let mut symbols = symbols;
-        symbols.insert(
-            self.name.clone(),
-            SymbolTableNode::FunctionDef(self.clone()),
-        );
+        symbols.insert(self.name.clone(), SymbolTableNode::FunctionDef(self.clone()));
         symbols
     }
 
@@ -35,7 +63,7 @@ impl CodeGen for FunctionDef {
         self,
         ctx: Self::Context,
         options: Self::Options,
-        symbols: SymbolTableScopes,
+        symbols: SymbolTableScopes
     ) -> Result<TokenStream, Box<dyn std::error::Error>> {
         let mut streams = TokenStream::new();
         let fn_name = format_ident!("{}", self.name);
@@ -51,23 +79,21 @@ impl CodeGen for FunctionDef {
         };
 
         let is_async = match ctx.clone() {
-            CodeGenContext::Async(_) => {
-                quote!(async)
-            }
+            CodeGenContext::Async(_) => { quote!(async) }
             _ => quote!(),
         };
 
-        let parameters = self
-            .args
+        let parameters = self.args
             .clone()
             .to_rust(ctx.clone(), options.clone(), symbols.clone())
             .expect(format!("parsing arguments {:?}", self.args).as_str());
 
         for s in self.body.iter() {
             streams.extend(
-                s.clone()
+                s
+                    .clone()
                     .to_rust(ctx.clone(), options.clone(), symbols.clone())
-                    .expect(format!("parsing statement {:?}", s).as_str()),
+                    .expect(format!("parsing statement {:?}", s).as_str())
             );
             streams.extend(quote!(;));
         }
@@ -78,7 +104,8 @@ impl CodeGen for FunctionDef {
             "".to_string()
         };
 
-        let function = quote! {
+        let function =
+            quote! {
             #[doc = #docstring]
             #visibility #is_async fn #fn_name(#parameters) {
                 #streams
@@ -92,10 +119,11 @@ impl CodeGen for FunctionDef {
     fn get_docstring(&self) -> Option<String> {
         let expr = self.body[0].clone();
         match expr.statement {
-            StatementType::Expr(e) => match e.value {
-                ExprType::Constant(c) => Some(c.to_string()),
-                _ => None,
-            },
+            StatementType::Expr(e) =>
+                match e.value {
+                    ExprType::Constant(c) => Some(c.to_string()),
+                    _ => None,
+                }
             _ => None,
         }
     }
