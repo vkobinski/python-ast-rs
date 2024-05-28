@@ -48,9 +48,5 @@ pub fn parse(input: impl AsRef<str>, filename: impl AsRef<str>) -> PyResult<Modu
             Some(Name::try_from(name_str).unwrap_or_else(|_| panic!("Invalid name {}", name_str)));
     }
 
-    println!("module: {:#?}", module);
-    for item in module.__dir__() {
-        println!("module.__dir__: {:#?}", item.as_ref());
-    }
     Ok(module)
 }
