@@ -32,7 +32,7 @@ use crate::{
     SymbolTableNode, SymbolTableScopes,
 };
 
-use log::debug;
+use tracing::debug;
 
 use serde::{Deserialize, Serialize};
 

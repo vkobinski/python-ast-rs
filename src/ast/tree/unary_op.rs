@@ -37,7 +37,7 @@ impl<'a> FromPyObject<'a> for UnaryOp {
     fn extract_bound(ob: &Bound<'a, PyAny>) -> PyResult<Self> {
         let py = ob.py();
 
-        log::debug!("ob: {}", dump(ob, None)?);
+        tracing::debug!("ob: {}", dump(ob, None)?);
         let op = ob.as_unbound().getattr(py, "op").expect(
             ob.error_message("<unknown>", "error getting unary operator")
                 .as_str(),
@@ -63,12 +63,12 @@ impl<'a> FromPyObject<'a> for UnaryOp {
             "UAdd" => Ops::UAdd,
             "USub" => Ops::USub,
             _ => {
-                log::debug!("{:?}", op);
+                tracing::debug!("{:?}", op);
                 Ops::Unknown
             }
         };
 
-        log::debug!("operand: {}", dump(&operand.bind(py), None)?);
+        tracing::debug!("operand: {}", dump(&operand.bind(py), None)?);
         let bound_op = operand.bind(py);
         let operand = ExprType::extract_bound(bound_op).expect("getting unary operator operand");
 
@@ -108,8 +108,8 @@ mod tests {
     fn test_not() {
         let options = PythonOptions::default();
         let result = crate::parse("not True", "test").unwrap();
-        log::info!("Python tree: {:?}", result);
-        //log::info!("{}", result);
+        tracing::info!("Python tree: {:?}", result);
+        //tracing::info!("{}", result);
 
         let code = result
             .to_rust(
@@ -118,6 +118,6 @@ mod tests {
                 SymbolTableScopes::new(),
             )
             .unwrap();
-        log::info!("module: {:?}", code);
+        tracing::info!("module: {:?}", code);
     }
 }

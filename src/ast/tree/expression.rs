@@ -17,10 +17,10 @@ impl<'a> FromPyObject<'a> for Container<crate::pytypes::List<ExprType>> {
     fn extract_bound(ob: &Bound<'a, PyAny>) -> PyResult<Self> {
         let list = crate::pytypes::List::<ExprType>::new();
 
-        log::debug!("pylist: {}", dump(ob, Some(4))?);
+        tracing::debug!("pylist: {}", dump(ob, Some(4))?);
         let _converted_list: Vec<Bound<PyAny>> = ob.extract()?;
         for item in _converted_list.iter() {
-            log::debug!("item: {:?}", item);
+            tracing::debug!("item: {:?}", item);
         }
 
         Ok(Self(list))
@@ -67,7 +67,7 @@ pub enum ExprType {
 
 impl<'a> FromPyObject<'a> for ExprType {
     fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
-        log::debug!("exprtype ob: {}", dump(ob, Some(4))?);
+        tracing::debug!("exprtype ob: {}", dump(ob, Some(4))?);
 
         let expr_type = ob.get_type().name().expect(
             ob.error_message(
@@ -76,7 +76,7 @@ impl<'a> FromPyObject<'a> for ExprType {
             )
             .as_str(),
         );
-        log::debug!("expression type: {}, value: {}", expr_type, dump(ob, None)?);
+        tracing::debug!("expression type: {}, value: {}", expr_type, dump(ob, None)?);
 
         let r = match expr_type.extract::<String>()?.as_str() {
             "Attribute" => {
@@ -131,7 +131,7 @@ impl<'a> FromPyObject<'a> for ExprType {
                 Ok(Self::Compare(c))
             }
             "Constant" => {
-                log::debug!("constant: {}", dump(ob, None)?);
+                tracing::debug!("constant: {}", dump(ob, None)?);
                 let c = ob.extract().expect(
                     ob.error_message(
                         "<unknown>",
@@ -493,7 +493,7 @@ impl<'a> FromPyObject<'a> for Expr {
         let ob_value = ob
             .getattr("value")
             .expect(ob.error_message("<unknown>", err_msg.as_str()).as_str());
-        log::debug!("ob_value: {}", dump(&ob_value, None)?);
+        tracing::debug!("ob_value: {}", dump(&ob_value, None)?);
 
         // The context is Load, Store, etc. For some types of expressions such as Constants, it does not exist.
         let ctx: Option<String> = if let Ok(pyany) = ob_value.getattr("ctx") {
@@ -518,7 +518,7 @@ impl<'a> FromPyObject<'a> for Expr {
             )
             .as_str(),
         );
-        log::debug!(
+        tracing::debug!(
             "expression type: {}, value: {}",
             expr_type,
             dump(&ob_value, None)?

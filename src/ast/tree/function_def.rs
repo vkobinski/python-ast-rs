@@ -1,4 +1,4 @@
-use log::debug;
+use tracing::debug;
 use proc_macro2::TokenStream;
 use pyo3::{Bound, FromPyObject, PyAny, PyResult, prelude::PyAnyMethods};
 use quote::{format_ident, quote};
