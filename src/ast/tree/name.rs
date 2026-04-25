@@ -49,7 +49,7 @@ impl TryFrom<&str> for Name {
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         let parts = s.split('.');
-        log::debug!("parts: {:?}", parts);
+        tracing::debug!("parts: {:?}", parts);
 
         let mut v = Vec::new();
         for part in parts {

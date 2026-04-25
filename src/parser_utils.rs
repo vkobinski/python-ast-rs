@@ -135,10 +135,10 @@ where
 
 /// Utility function for consistent logging during Python object extraction.
 pub fn log_extraction(ob: &Bound<PyAny>, context: &str) {
-    if log::log_enabled!(log::Level::Debug) {
+    if tracing::enabled!(tracing::Level::DEBUG) {
         match dump(ob, None) {
-            Ok(dump_str) => log::debug!("Extracting {}: {}", context, dump_str),
-            Err(_) => log::debug!("Extracting {} (dump failed)", context),
+            Ok(dump_str) => tracing::debug!("Extracting {}: {}", context, dump_str),
+            Err(_) => tracing::debug!("Extracting {} (dump failed)", context),
         }
     }
 }

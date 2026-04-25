@@ -6,7 +6,7 @@ use std::fmt;
 
 use crate::tree::{ClassDef, FunctionDef, Import, ImportFrom};
 
-//use log::{debug, info};
+//use tracing::{debug, info};
 
 //use crate::codegen::{CodeGen, PythonOptions, CodeGenContext};
 use crate::tree::ExprType;

@@ -29,7 +29,7 @@ impl<'a> FromPyObject<'a> for BoolOps {
             "And" => BoolOps::And,
             "Or" => BoolOps::Or,
             _ => {
-                log::debug!("Found unknown BoolOp {:?}", op_type_str);
+                tracing::debug!("Found unknown BoolOp {:?}", op_type_str);
                 BoolOps::Unknown
             }
         };
@@ -47,7 +47,7 @@ pub struct BoolOp {
 
 impl<'a> FromPyObject<'a> for BoolOp {
     fn extract_bound(ob: &Bound<'a, PyAny>) -> PyResult<Self> {
-        log::debug!("ob: {}", dump(ob, None)?);
+        tracing::debug!("ob: {}", dump(ob, None)?);
         let op = ob.getattr("op").expect(
             ob.error_message("<unknown>", "error getting unary operator")
                 .as_str(),
@@ -66,7 +66,7 @@ impl<'a> FromPyObject<'a> for BoolOp {
                 .as_str(),
         );
 
-        log::debug!("BoolOps values: {}", dump(&values, None)?);
+        tracing::debug!("BoolOps values: {}", dump(&values, None)?);
 
         let value: Vec<ExprType> = values.extract().expect("getting values from BoolOp");
         let left = value[0].clone();
@@ -78,12 +78,12 @@ impl<'a> FromPyObject<'a> for BoolOp {
             "Or" => BoolOps::Or,
 
             _ => {
-                log::debug!("Found unknown BoolOp {:?}", op);
+                tracing::debug!("Found unknown BoolOp {:?}", op);
                 BoolOps::Unknown
             }
         };
 
-        log::debug!(
+        tracing::debug!(
             "left: {:?}, right: {:?}, op: {:?}/{:?}",
             left,
             right,
@@ -154,8 +154,8 @@ mod tests {
     fn test_and() {
         let options = PythonOptions::default();
         let result = crate::parse("1 and 2", "test_case.py").unwrap();
-        log::info!("Python tree: {:?}", result);
-        //log::info!("{}", result.to_rust().unwrap());
+        tracing::info!("Python tree: {:?}", result);
+        //tracing::info!("{}", result.to_rust().unwrap());
 
         let code = result
             .to_rust(
@@ -164,15 +164,15 @@ mod tests {
                 SymbolTableScopes::new(),
             )
             .unwrap();
-        log::info!("module: {:?}", code);
+        tracing::info!("module: {:?}", code);
     }
 
     #[test]
     fn test_or() {
         let options = PythonOptions::default();
         let result = crate::parse("1 or 2", "test_case.py").unwrap();
-        log::info!("Python tree: {:?}", result);
-        //log::info!("{}", result);
+        tracing::info!("Python tree: {:?}", result);
+        //tracing::info!("{}", result);
 
         let code = result
             .to_rust(
@@ -181,6 +181,6 @@ mod tests {
                 SymbolTableScopes::new(),
             )
             .unwrap();
-        log::info!("module: {:?}", code);
+        tracing::info!("module: {:?}", code);
     }
 }

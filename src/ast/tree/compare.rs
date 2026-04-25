@@ -41,7 +41,7 @@ pub struct Compare {
 
 impl<'a> FromPyObject<'a> for Compare {
     fn extract_bound(ob: &Bound<'a, PyAny>) -> PyResult<Self> {
-        log::debug!("ob: {}", dump(ob, None)?);
+        tracing::debug!("ob: {}", dump(ob, None)?);
 
         // Python allows for multiple comparators, rust we only supports one, so we have to rewrite the comparison a little.
         let ops_bound: Vec<Bound<PyAny>> = ob
@@ -78,7 +78,7 @@ impl<'a> FromPyObject<'a> for Compare {
                 "NotIn" => Compares::NotIn,
 
                 _ => {
-                    log::debug!("Found unknown Compare with type: {}", op_type_str);
+                    tracing::debug!("Found unknown Compare with type: {}", op_type_str);
                     Compares::Unknown
                 }
             };
@@ -94,7 +94,7 @@ impl<'a> FromPyObject<'a> for Compare {
             ob.error_message("<unknown>", "error getting compoarator")
                 .as_str(),
         );
-        log::debug!(
+        tracing::debug!(
             "left: {}, comparators: {}",
             dump(&left, None)?,
             dump(&comparators, None)?
@@ -105,7 +105,7 @@ impl<'a> FromPyObject<'a> for Compare {
             .extract()
             .expect("getting comparators from Compare");
 
-        log::debug!(
+        tracing::debug!(
             "left: {:?}, comparators: {:?}, op: {:?}",
             left,
             comparators,
@@ -180,7 +180,7 @@ mod tests {
     fn test_simple_eq() {
         let options = PythonOptions::default();
         let result = crate::parse("1 == 2", "test_case.py").unwrap();
-        log::info!("Python tree: {:?}", result);
+        tracing::info!("Python tree: {:?}", result);
         //info!("{}", result);
 
         let code = result.to_rust(
@@ -188,14 +188,14 @@ mod tests {
             options,
             SymbolTableScopes::new(),
         );
-        log::info!("module: {:?}", code);
+        tracing::info!("module: {:?}", code);
     }
 
     #[test]
     fn test_complex_compare() {
         let options = PythonOptions::default();
         let result = crate::parse("1 < a > 6", "test_case.py").unwrap();
-        log::info!("Python tree: {:?}", result);
+        tracing::info!("Python tree: {:?}", result);
         //info!("{}", result);
 
         let code = result.to_rust(
@@ -203,6 +203,6 @@ mod tests {
             options,
             SymbolTableScopes::new(),
         );
-        log::info!("module: {:?}", code);
+        tracing::info!("module: {:?}", code);
     }
 }

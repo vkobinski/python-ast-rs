@@ -91,7 +91,7 @@ macro_rules! impl_binary_op_from_py {
     ($struct_name:ident, $enum_name:ident, $op_variants:tt) => {
         impl<'a> FromPyObject<'a> for $struct_name {
             fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
-                log::debug!("ob: {}", dump(ob, None)?);
+                tracing::debug!("ob: {}", dump(ob, None)?);
                 
                 let op = extract_py_attr!(ob, "op", "operator");
                 let op_type = extract_py_type_name!(op, "binary operator")?;
@@ -99,13 +99,13 @@ macro_rules! impl_binary_op_from_py {
                 let left = extract_py_attr!(ob, "left", "binary operand");
                 let right = extract_py_attr!(ob, "right", "binary operand");
                 
-                log::debug!("left: {}, right: {}", dump(&left, None)?, dump(&right, None)?);
+                tracing::debug!("left: {}, right: {}", dump(&left, None)?, dump(&right, None)?);
 
                 let op_type_str: String = op_type.extract()?;
                 let op = match op_type_str.as_ref() {
                     $op_variants,
                     _ => {
-                        log::debug!("Found unknown {} {:?}", stringify!($enum_name), op);
+                        tracing::debug!("Found unknown {} {:?}", stringify!($enum_name), op);
                         $enum_name::Unknown
                     }
                 };
@@ -132,14 +132,14 @@ macro_rules! create_parse_test {
         fn $test_name() {
             let options = PythonOptions::default();
             let result = crate::parse($code, $file_name).unwrap();
-            log::info!("Python tree: {:?}", result);
+            tracing::info!("Python tree: {:?}", result);
 
             let code = result.to_rust(
                 CodeGenContext::Module($file_name.replace(".py", "").to_string()),
                 options,
                 SymbolTableScopes::new(),
             );
-            log::info!("Generated code: {:?}", code);
+            tracing::info!("Generated code: {:?}", code);
         }
     };
 }

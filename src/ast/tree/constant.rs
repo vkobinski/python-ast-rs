@@ -2,7 +2,7 @@ use std::fmt::*;
 
 use encoding::{all::ISO_8859_6, DecoderTrap, Encoding};
 use litrs::Literal;
-use log::debug;
+use tracing::debug;
 use proc_macro2::*;
 use pyo3::{Bound, FromPyObject, PyAny, PyResult, prelude::PyAnyMethods};
 use quote::quote;
@@ -164,7 +164,7 @@ mod tests {
     use test_log::test;
     //use super::*;
     use crate::{symbols::SymbolTableScopes, CodeGen};
-    use log::debug;
+    use tracing::debug;
 
     #[test]
     fn parse_string() {

@@ -7,7 +7,7 @@ use crate::{
     ImportFrom, Node, PythonOptions, SymbolTableScopes, If, For, While, Try, AsyncWith, AsyncFor, Raise, With,
 };
 
-use log::debug;
+use tracing::debug;
 
 use serde::{Deserialize, Serialize};
 
@@ -162,7 +162,7 @@ impl<'a> FromPyObject<'a> for StatementType {
                 Ok(StatementType::Expr(expr))
             }
             "Return" => {
-                log::debug!("return expression: {}", dump(ob, None)?);
+                tracing::debug!("return expression: {}", dump(ob, None)?);
                 // Extract the return value from the Return statement's 'value' field
                 let return_value = if let Ok(value_attr) = ob.getattr("value") {
                     if value_attr.is_none() {
@@ -409,12 +409,12 @@ def foo():
             "test_case",
         )
         .unwrap();
-        log::info!("{:?}", result);
+        tracing::info!("{:?}", result);
         let code = result.to_rust(
             CodeGenContext::Module("".to_string()),
             options,
             SymbolTableScopes::new(),
         );
-        log::info!("module: {:?}", code);
+        tracing::info!("module: {:?}", code);
     }
 }

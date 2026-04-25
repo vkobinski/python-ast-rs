@@ -21,7 +21,7 @@ fn parse_to_py(
     let args = (input.as_ref(), filename.as_ref());
 
     let py_tree = t.call1(args)?;
-    log::debug!("py_tree: {}", dump(&py_tree, Some(4))?);
+    tracing::debug!("py_tree: {}", dump(&py_tree, Some(4))?);
 
     Ok(py_tree.into())
 }
@@ -91,9 +91,9 @@ pub fn parse_enhanced(input: impl AsRef<str>, filename: impl AsRef<str>) -> Crat
         })?);
     }
 
-    log::debug!("module: {:#?}", module);
+    tracing::debug!("module: {:#?}", module);
     for item in module.__dir__() {
-        log::debug!("module.__dir__: {:#?}", item.as_ref());
+        tracing::debug!("module.__dir__: {:#?}", item.as_ref());
     }
     Ok(module)
 }

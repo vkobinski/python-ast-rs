@@ -48,9 +48,9 @@ impl<'a> CodeGen for List<'a> {
         let mut elements = Vec::new();
         let mut has_starred = false;
         
-        log::debug!("================Processing list with {} elements", self.elts.len());
+        tracing::debug!("================Processing list with {} elements", self.elts.len());
         for elt in self.elts {
-            log::debug!("elt: {}", dump(&elt, None)?);
+            tracing::debug!("elt: {}", dump(&elt, None)?);
             
             // Extract the element as ExprType and convert to Rust
             let expr: ExprType = elt.extract()?;
@@ -122,7 +122,7 @@ mod tests {
         match statement {
             StatementType::Expr(e) => match e.value {
                 ExprType::List(list) => {
-                    log::debug!("{:#?}", list);
+                    tracing::debug!("{:#?}", list);
                     assert_eq!(list.len(), 3);
                 }
                 _ => panic!("Could not find inner expression"),

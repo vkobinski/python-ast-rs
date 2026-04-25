@@ -127,7 +127,7 @@ impl BinaryOperation for BinOp {
 
 impl<'a> FromPyObject<'a> for BinOp {
     fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
-        log::debug!("ob: {}", dump(ob, None)?);
+        tracing::debug!("ob: {}", dump(ob, None)?);
         
         let op = ob.extract_attr_with_context("op", "binary operator")?;
         let op_type_str = op.extract_type_name("binary operator")?;
@@ -135,11 +135,11 @@ impl<'a> FromPyObject<'a> for BinOp {
         let left = ob.extract_attr_with_context("left", "binary operand")?;
         let right = ob.extract_attr_with_context("right", "binary operand")?;
         
-        log::debug!("left: {}, right: {}", dump(&left, None)?, dump(&right, None)?);
+        tracing::debug!("left: {}, right: {}", dump(&left, None)?, dump(&right, None)?);
 
         let op = BinOps::parse_or_unknown(&op_type_str);
         if matches!(op, BinOps::Unknown) {
-            log::debug!("Found unknown BinOp {:?}", op_type_str);
+            tracing::debug!("Found unknown BinOp {:?}", op_type_str);
         }
 
         let left = left.extract().expect("getting binary operator operand");
