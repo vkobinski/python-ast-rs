@@ -1,15 +1,19 @@
 use proc_macro2::TokenStream;
-use pyo3::{FromPyObject, PyAny, PyResult};
+use pyo3::{Bound, FromPyObject, PyAny, PyResult, prelude::PyAnyMethods, types::PyTypeMethods};
 use quote::quote;
 
 use crate::{
-    dump, Assign, Call, ClassDef, CodeGen, CodeGenContext, Error, Expr, FunctionDef, Import,
-    ImportFrom, Node, PythonOptions, SymbolTableScopes,
+    dump, Assign, AugAssign, Call, ClassDef, CodeGen, CodeGenContext, Error, Expr, FunctionDef, Import,
+    ImportFrom, Node, PythonOptions, SymbolTableScopes, If, For, While, Try, AsyncWith, AsyncFor, Raise, With,
 };
 
-use log::debug;
+use tracing::debug;
 
 use serde::{Deserialize, Serialize};
+
+/// AST node types that can be used as a statement implement this type.
+pub trait PyStatementTrait: Clone + PartialEq {
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Statement {
@@ -21,13 +25,13 @@ pub struct Statement {
 }
 
 impl<'a> FromPyObject<'a> for Statement {
-    fn extract(ob: &'a PyAny) -> PyResult<Self> {
+    fn extract_bound(ob: &Bound<'a, PyAny>) -> PyResult<Self> {
         Ok(Self {
             lineno: ob.lineno(),
             col_offset: ob.col_offset(),
             end_lineno: ob.end_lineno(),
             end_col_offset: ob.end_col_offset(),
-            statement: StatementType::extract(ob)?,
+            statement: StatementType::extract_bound(ob)?,
         })
     }
 }
@@ -80,6 +84,7 @@ impl CodeGen for Statement {
 pub enum StatementType {
     AsyncFunctionDef(FunctionDef),
     Assign(Assign),
+    AugAssign(AugAssign),
     Break,
     Continue,
     ClassDef(ClassDef),
@@ -90,12 +95,20 @@ pub enum StatementType {
     ImportFrom(ImportFrom),
     Expr(Expr),
     FunctionDef(FunctionDef),
+    If(If),
+    For(For),
+    While(While),
+    Try(Try),
+    AsyncWith(AsyncWith),
+    AsyncFor(AsyncFor),
+    Raise(Raise),
+    With(With),
 
     Unimplemented(String),
 }
 
 impl<'a> FromPyObject<'a> for StatementType {
-    fn extract(ob: &'a PyAny) -> PyResult<Self> {
+    fn extract_bound(ob: &Bound<'a, PyAny>) -> PyResult<Self> {
         let err_msg = format!("getting type for statement {:?}", ob);
         let ob_type = ob
             .get_type()
@@ -103,20 +116,24 @@ impl<'a> FromPyObject<'a> for StatementType {
             .unwrap_or_else(|_| panic!("{}", ob.error_message("<unknown>", err_msg)));
 
         debug!("statement...ob_type: {}...{}", ob_type, dump(ob, Some(4))?);
-        match ob_type.as_ref() {
+        match ob_type.extract::<String>()?.as_str() {
             "AsyncFunctionDef" => Ok(StatementType::AsyncFunctionDef(
-                FunctionDef::extract(ob).unwrap_or_else(|_| {
+                FunctionDef::extract_bound(ob).unwrap_or_else(|_| {
                     panic!("Failed to extract async function: {:?}", dump(ob, Some(4)))
                 }),
             )),
             "Assign" => {
-                let assignment = Assign::extract(ob).expect("reading assignment");
+                let assignment = Assign::extract_bound(ob).expect("reading assignment");
                 Ok(StatementType::Assign(assignment))
+            }
+            "AugAssign" => {
+                let aug_assignment = AugAssign::extract_bound(ob).expect("reading augmented assignment");
+                Ok(StatementType::AugAssign(aug_assignment))
             }
             "Pass" => Ok(StatementType::Pass),
             "Call" => {
                 let call =
-                    Call::extract(ob.getattr("value").unwrap_or_else(|_| {
+                    Call::extract_bound(&ob.getattr("value").unwrap_or_else(|_| {
                         panic!("getting value from {:?} in call statement", ob)
                     }))
                     .unwrap_or_else(|_| panic!("extracting call statement {:?}", ob));
@@ -124,37 +141,97 @@ impl<'a> FromPyObject<'a> for StatementType {
                 Ok(StatementType::Call(call))
             }
             "ClassDef" => Ok(StatementType::ClassDef(
-                ClassDef::extract(ob).unwrap_or_else(|_| panic!("Class definition {:?}", ob)),
+                ClassDef::extract_bound(ob).unwrap_or_else(|_| panic!("Class definition {:?}", ob)),
             )),
             "Continue" => Ok(StatementType::Continue),
             "Break" => Ok(StatementType::Break),
             "FunctionDef" => Ok(StatementType::FunctionDef(
-                FunctionDef::extract(ob).unwrap_or_else(|_| {
+                FunctionDef::extract_bound(ob).unwrap_or_else(|_| {
                     panic!("Failed to extract function: {:?}", dump(ob, Some(4)))
                 }),
             )),
             "Import" => Ok(StatementType::Import(
-                Import::extract(ob).unwrap_or_else(|_| panic!("Import {:?}", ob)),
+                Import::extract_bound(ob).unwrap_or_else(|_| panic!("Import {:?}", ob)),
             )),
             "ImportFrom" => Ok(StatementType::ImportFrom(
-                ImportFrom::extract(ob).unwrap_or_else(|_| panic!("ImportFrom {:?}", ob)),
+                ImportFrom::extract_bound(ob).unwrap_or_else(|_| panic!("ImportFrom {:?}", ob)),
             )),
             "Expr" => {
-                let expr = Expr::extract(
-                    ob.extract()
-                        .unwrap_or_else(|_| panic!("extracting Expr {:?}", ob)),
-                )
-                .expect(format!("Expr {:?}", ob).as_str());
+                let expr = ob.extract()
+                    .expect(format!("Expr {:?}", ob).as_str());
                 Ok(StatementType::Expr(expr))
             }
             "Return" => {
-                log::debug!("return expression: {}", dump(ob, None)?);
-                let expr = Expr::extract(
-                    ob.extract()
-                        .unwrap_or_else(|_| panic!("extracting return Expr {:?}", ob)),
-                )
-                .unwrap_or_else(|_| panic!("return Expr {:?}", dump(ob, None)));
-                Ok(StatementType::Return(Some(expr)))
+                tracing::debug!("return expression: {}", dump(ob, None)?);
+                // Extract the return value from the Return statement's 'value' field
+                let return_value = if let Ok(value_attr) = ob.getattr("value") {
+                    if value_attr.is_none() {
+                        // Bare 'return' statement - create a NoneType Expr
+                        Some(Expr {
+                            value: crate::tree::ExprType::NoneType(crate::tree::Constant(None)),
+                            ctx: None,
+                            lineno: ob.lineno(),
+                            col_offset: ob.col_offset(),
+                            end_lineno: ob.end_lineno(),
+                            end_col_offset: ob.end_col_offset(),
+                        })
+                    } else {
+                        // Return with actual expression - extract as ExprType then wrap in Expr
+                        let expr_value: crate::tree::ExprType = value_attr.extract()
+                            .unwrap_or_else(|_| panic!("return value ExprType {:?}", dump(&value_attr, None).unwrap_or_else(|_| "unknown".to_string())));
+                        Some(Expr {
+                            value: expr_value,
+                            ctx: None,
+                            lineno: ob.lineno(),
+                            col_offset: ob.col_offset(),
+                            end_lineno: ob.end_lineno(),
+                            end_col_offset: ob.end_col_offset(),
+                        })
+                    }
+                } else {
+                    None
+                };
+                Ok(StatementType::Return(return_value))
+            }
+            "If" => {
+                let if_stmt = If::extract_bound(ob)
+                    .unwrap_or_else(|_| panic!("If statement {:?}", dump(ob, None)));
+                Ok(StatementType::If(if_stmt))
+            }
+            "For" => {
+                let for_stmt = For::extract_bound(ob)
+                    .unwrap_or_else(|_| panic!("For statement {:?}", dump(ob, None)));
+                Ok(StatementType::For(for_stmt))
+            }
+            "While" => {
+                let while_stmt = While::extract_bound(ob)
+                    .unwrap_or_else(|_| panic!("While statement {:?}", dump(ob, None)));
+                Ok(StatementType::While(while_stmt))
+            }
+            "Try" => {
+                let try_stmt = Try::extract_bound(ob)
+                    .unwrap_or_else(|_| panic!("Try statement {:?}", dump(ob, None)));
+                Ok(StatementType::Try(try_stmt))
+            }
+            "AsyncWith" => {
+                let async_with_stmt = AsyncWith::extract_bound(ob)
+                    .unwrap_or_else(|_| panic!("AsyncWith statement {:?}", dump(ob, None)));
+                Ok(StatementType::AsyncWith(async_with_stmt))
+            }
+            "AsyncFor" => {
+                let async_for_stmt = AsyncFor::extract_bound(ob)
+                    .unwrap_or_else(|_| panic!("AsyncFor statement {:?}", dump(ob, None)));
+                Ok(StatementType::AsyncFor(async_for_stmt))
+            }
+            "Raise" => {
+                let raise_stmt = Raise::extract_bound(ob)
+                    .unwrap_or_else(|_| panic!("Raise statement {:?}", dump(ob, None)));
+                Ok(StatementType::Raise(raise_stmt))
+            }
+            "With" => {
+                let with_stmt = With::extract_bound(ob)
+                    .unwrap_or_else(|_| panic!("With statement {:?}", dump(ob, None)));
+                Ok(StatementType::With(with_stmt))
             }
             _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "Unimplemented statement type {}, {}",
@@ -173,11 +250,20 @@ impl CodeGen for StatementType {
     fn find_symbols(self, symbols: Self::SymbolTable) -> Self::SymbolTable {
         match self {
             StatementType::Assign(a) => a.find_symbols(symbols),
+            StatementType::AugAssign(a) => a.find_symbols(symbols),
             StatementType::ClassDef(c) => c.find_symbols(symbols),
             StatementType::FunctionDef(f) => f.find_symbols(symbols),
             StatementType::Import(i) => i.find_symbols(symbols),
             StatementType::ImportFrom(i) => i.find_symbols(symbols),
             StatementType::Expr(e) => e.find_symbols(symbols),
+            StatementType::If(i) => i.find_symbols(symbols),
+            StatementType::For(f) => f.find_symbols(symbols),
+            StatementType::While(w) => w.find_symbols(symbols),
+            StatementType::Try(t) => t.find_symbols(symbols),
+            StatementType::AsyncWith(aw) => aw.find_symbols(symbols),
+            StatementType::AsyncFor(af) => af.find_symbols(symbols),
+            StatementType::Raise(r) => r.find_symbols(symbols),
+            StatementType::With(w) => w.find_symbols(symbols),
             _ => symbols,
         }
     }
@@ -196,6 +282,7 @@ impl CodeGen for StatementType {
                 Ok(quote!(#func_def))
             }
             StatementType::Assign(a) => a.to_rust(ctx, options, symbols),
+            StatementType::AugAssign(a) => a.to_rust(ctx, options, symbols),
             StatementType::Break => Ok(quote! {break;}),
             StatementType::Call(c) => c.to_rust(ctx, options, symbols),
             StatementType::ClassDef(c) => c.to_rust(ctx, options, symbols),
@@ -213,6 +300,14 @@ impl CodeGen for StatementType {
                     .unwrap_or_else(|_| panic!("parsing expression {:#?}", e));
                 Ok(quote!(return #exp))
             }
+            StatementType::If(i) => i.to_rust(ctx, options, symbols),
+            StatementType::For(f) => f.to_rust(ctx, options, symbols),
+            StatementType::While(w) => w.to_rust(ctx, options, symbols),
+            StatementType::Try(t) => t.to_rust(ctx, options, symbols),
+            StatementType::AsyncWith(aw) => aw.to_rust(ctx, options, symbols),
+            StatementType::AsyncFor(af) => af.to_rust(ctx, options, symbols),
+            StatementType::Raise(r) => r.to_rust(ctx, options, symbols),
+            StatementType::With(w) => w.to_rust(ctx, options, symbols),
             _ => {
                 let error = Error::StatementNotYetImplemented(self);
                 Err(Box::new(error))
@@ -314,12 +409,12 @@ def foo():
             "test_case",
         )
         .unwrap();
-        log::info!("{:?}", result);
+        tracing::info!("{:?}", result);
         let code = result.to_rust(
             CodeGenContext::Module("".to_string()),
             options,
             SymbolTableScopes::new(),
         );
-        log::info!("module: {:?}", code);
+        tracing::info!("module: {:?}", code);
     }
 }

@@ -1,11 +1,11 @@
 use proc_macro2::TokenStream;
-use pyo3::{FromPyObject, PyAny, PyResult};
+use pyo3::{Bound, FromPyObject, PyAny, PyResult, prelude::PyAnyMethods, types::PyTypeMethods};
 use quote::quote;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     dump, Attribute, Await, BinOp, BoolOp, Call, CodeGen, CodeGenContext, Compare, Constant, Error,
-    Name, NamedExpr, Node, PythonOptions, SymbolTableScopes, UnaryOp,
+    Name, NamedExpr, Node, PythonOptions, SymbolTableScopes, UnaryOp, Lambda, IfExp, Dict, Set, Tuple, Subscript, Starred, ListComp, DictComp, SetComp, GeneratorExp, Yield, YieldFrom, JoinedStr, FormattedValue,
 };
 
 /// Mostly this shouldn't be used, but it exists so that we don't have to manually implement FromPyObject on all of ExprType
@@ -14,13 +14,13 @@ use crate::{
 pub struct Container<T>(pub T);
 
 impl<'a> FromPyObject<'a> for Container<crate::pytypes::List<ExprType>> {
-    fn extract(ob: &'a PyAny) -> PyResult<Self> {
+    fn extract_bound(ob: &Bound<'a, PyAny>) -> PyResult<Self> {
         let list = crate::pytypes::List::<ExprType>::new();
 
-        log::debug!("pylist: {}", dump(ob, Some(4))?);
-        let _converted_list: Vec<&PyAny> = ob.extract()?;
-        for item in ob.iter().expect("extracting list") {
-            log::debug!("item: {:?}", item);
+        tracing::debug!("pylist: {}", dump(ob, Some(4))?);
+        let _converted_list: Vec<Bound<PyAny>> = ob.extract()?;
+        for item in _converted_list.iter() {
+            tracing::debug!("item: {:?}", item);
         }
 
         Ok(Self(list))
@@ -33,31 +33,31 @@ pub enum ExprType {
     NamedExpr(NamedExpr),
     BinOp(BinOp),
     UnaryOp(UnaryOp),
-    /*Lambda(Lamda),
+    Lambda(Lambda),
     IfExp(IfExp),
     Dict(Dict),
     Set(Set),
     ListComp(ListComp),
-    SetComp(SetComp),
     DictComp(DictComp),
-    GeneratorExp(),*/
+    SetComp(SetComp),
+    GeneratorExp(GeneratorExp),
     Await(Await),
-    /*Yield(),
-    YieldFrom(),*/
+    Yield(Yield),
+    YieldFrom(YieldFrom),
     Compare(Compare),
     Call(Call),
-    /*FormattedValue(),
-    JoinedStr(),*/
+    FormattedValue(FormattedValue),
+    JoinedStr(JoinedStr),
     Constant(Constant),
 
     /// These can appear in a few places, such as the left side of an assignment.
-    Attribute(Attribute), /*
-                          Subscript(),
-                          Starred(),*/
+    Attribute(Attribute),
+    Subscript(Subscript),
+    Starred(Starred),
     Name(Name),
     List(Vec<ExprType>),
-    /*Tuple(),
-    Slice(),*/
+    Tuple(Tuple),
+    /*Slice(),*/
     NoneType(Constant),
 
     Unimplemented(String),
@@ -66,8 +66,8 @@ pub enum ExprType {
 }
 
 impl<'a> FromPyObject<'a> for ExprType {
-    fn extract(ob: &'a PyAny) -> PyResult<Self> {
-        log::debug!("exprtype ob: {}", dump(ob, Some(4))?);
+    fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
+        tracing::debug!("exprtype ob: {}", dump(ob, Some(4))?);
 
         let expr_type = ob.get_type().name().expect(
             ob.error_message(
@@ -76,11 +76,11 @@ impl<'a> FromPyObject<'a> for ExprType {
             )
             .as_str(),
         );
-        log::debug!("expression type: {}, value: {}", expr_type, dump(ob, None)?);
+        tracing::debug!("expression type: {}, value: {}", expr_type, dump(ob, None)?);
 
-        let r = match expr_type.as_ref() {
+        let r = match expr_type.extract::<String>()?.as_str() {
             "Attribute" => {
-                let a = Attribute::extract(ob).expect(
+                let a = ob.extract().expect(
                     ob.error_message(
                         "<unknown>",
                         format!("extracting Attribute in expression {}", dump(ob, None)?),
@@ -91,7 +91,7 @@ impl<'a> FromPyObject<'a> for ExprType {
             }
             "Await" => {
                 //println!("await: {}", dump(ob, None)?);
-                let a = Await::extract(ob).expect(
+                let a = ob.extract().expect(
                     ob.error_message(
                         "<unknown>",
                         format!("extracting await value in expression {}", dump(ob, None)?),
@@ -100,8 +100,18 @@ impl<'a> FromPyObject<'a> for ExprType {
                 );
                 Ok(Self::Await(a))
             }
+            "BoolOp" => {
+                let b = ob.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!("extracting BoolOp in expression {}", dump(ob, None)?),
+                    )
+                    .as_str(),
+                );
+                Ok(Self::BoolOp(b))
+            }
             "Call" => {
-                let et = Call::extract(ob).expect(
+                let et = ob.extract().expect(
                     ob.error_message(
                         "<unknown>",
                         format!("parsing Call expression {}", dump(ob, None)?),
@@ -111,7 +121,7 @@ impl<'a> FromPyObject<'a> for ExprType {
                 Ok(Self::Call(et))
             }
             "Compare" => {
-                let c = Compare::extract(ob).expect(
+                let c = ob.extract().expect(
                     ob.error_message(
                         "<unknown>",
                         format!("extracting Compare in expression {}", dump(ob, None)?),
@@ -121,8 +131,8 @@ impl<'a> FromPyObject<'a> for ExprType {
                 Ok(Self::Compare(c))
             }
             "Constant" => {
-                log::debug!("constant: {}", dump(ob, None)?);
-                let c = Constant::extract(ob).expect(
+                tracing::debug!("constant: {}", dump(ob, None)?);
+                let c = ob.extract().expect(
                     ob.error_message(
                         "<unknown>",
                         format!("extracting Constant in expression {}", dump(ob, None)?),
@@ -132,14 +142,64 @@ impl<'a> FromPyObject<'a> for ExprType {
                 Ok(Self::Constant(c))
             }
             "List" => {
-                //let list = crate::pytypes::List::<ExprType>::new();
-                let list: Vec<ExprType> = ob
-                    .extract()
-                    .expect(format!("extracting List {}", dump(ob, None)?).as_str());
-                Ok(Self::List(list))
+                // Extract the list elements using the 'elts' attribute
+                let elts_attr = ob.getattr("elts")
+                    .expect(format!("getting elts attribute from List {}", dump(ob, None)?).as_str());
+                let elts_vec: Vec<Bound<PyAny>> = elts_attr.extract()
+                    .expect(format!("extracting elts as Vec<Bound<PyAny>> from List {}", dump(ob, None)?).as_str());
+                
+                // Convert each element to ExprType
+                let mut expr_list = Vec::new();
+                for elt in elts_vec {
+                    let expr: ExprType = elt.extract()
+                        .expect(format!("extracting list element {}", dump(&elt, None)?).as_str());
+                    expr_list.push(expr);
+                }
+                
+                Ok(Self::List(expr_list))
+            }
+            "ListComp" => {
+                let lc = ob.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!("extracting ListComp in expression {}", dump(ob, None)?),
+                    )
+                    .as_str(),
+                );
+                Ok(Self::ListComp(lc))
+            }
+            "DictComp" => {
+                let dc = ob.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!("extracting DictComp in expression {}", dump(ob, None)?),
+                    )
+                    .as_str(),
+                );
+                Ok(Self::DictComp(dc))
+            }
+            "SetComp" => {
+                let sc = ob.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!("extracting SetComp in expression {}", dump(ob, None)?),
+                    )
+                    .as_str(),
+                );
+                Ok(Self::SetComp(sc))
+            }
+            "GeneratorExp" => {
+                let ge = ob.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!("extracting GeneratorExp in expression {}", dump(ob, None)?),
+                    )
+                    .as_str(),
+                );
+                Ok(Self::GeneratorExp(ge))
             }
             "Name" => {
-                let name = Name::extract(ob).expect(
+                let name = ob.extract().expect(
                     ob.error_message(
                         "<unknown>",
                         format!("parsing Name expression {}", dump(ob, None)?),
@@ -149,7 +209,7 @@ impl<'a> FromPyObject<'a> for ExprType {
                 Ok(Self::Name(name))
             }
             "UnaryOp" => {
-                let c = UnaryOp::extract(ob).expect(
+                let c = ob.extract().expect(
                     ob.error_message(
                         "<unknown>",
                         format!("extracting UnaryOp in expression {}", dump(ob, None)?),
@@ -159,7 +219,7 @@ impl<'a> FromPyObject<'a> for ExprType {
                 Ok(Self::UnaryOp(c))
             }
             "BinOp" => {
-                let c = BinOp::extract(ob).expect(
+                let c = ob.extract().expect(
                     ob.error_message(
                         "<unknown>",
                         format!("extracting BinOp in expression {}", dump(ob, None)?),
@@ -167,6 +227,116 @@ impl<'a> FromPyObject<'a> for ExprType {
                     .as_str(),
                 );
                 Ok(Self::BinOp(c))
+            }
+            "Lambda" => {
+                let l = ob.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!("extracting Lambda in expression {}", dump(ob, None)?),
+                    )
+                    .as_str(),
+                );
+                Ok(Self::Lambda(l))
+            }
+            "IfExp" => {
+                let i = ob.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!("extracting IfExp in expression {}", dump(ob, None)?),
+                    )
+                    .as_str(),
+                );
+                Ok(Self::IfExp(i))
+            }
+            "Dict" => {
+                let d = ob.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!("extracting Dict in expression {}", dump(ob, None)?),
+                    )
+                    .as_str(),
+                );
+                Ok(Self::Dict(d))
+            }
+            "Set" => {
+                let s = ob.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!("extracting Set in expression {}", dump(ob, None)?),
+                    )
+                    .as_str(),
+                );
+                Ok(Self::Set(s))
+            }
+            "Tuple" => {
+                let t = ob.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!("extracting Tuple in expression {}", dump(ob, None)?),
+                    )
+                    .as_str(),
+                );
+                Ok(Self::Tuple(t))
+            }
+            "Subscript" => {
+                let s = ob.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!("extracting Subscript in expression {}", dump(ob, None)?),
+                    )
+                    .as_str(),
+                );
+                Ok(Self::Subscript(s))
+            }
+            "Starred" => {
+                let s = ob.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!("extracting Starred in expression {}", dump(ob, None)?),
+                    )
+                    .as_str(),
+                );
+                Ok(Self::Starred(s))
+            }
+            "Yield" => {
+                let y = ob.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!("extracting Yield in expression {}", dump(ob, None)?),
+                    )
+                    .as_str(),
+                );
+                Ok(Self::Yield(y))
+            }
+            "YieldFrom" => {
+                let yf = ob.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!("extracting YieldFrom in expression {}", dump(ob, None)?),
+                    )
+                    .as_str(),
+                );
+                Ok(Self::YieldFrom(yf))
+            }
+            "JoinedStr" => {
+                let js = ob.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!("extracting JoinedStr in expression {}", dump(ob, None)?),
+                    )
+                    .as_str(),
+                );
+                Ok(Self::JoinedStr(js))
+            }
+            "FormattedValue" => {
+                let fv = ob.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!("extracting FormattedValue in expression {}", dump(ob, None)?),
+                    )
+                    .as_str(),
+                );
+                Ok(Self::FormattedValue(fv))
             }
             _ => {
                 let err_msg = format!(
@@ -198,20 +368,99 @@ impl<'a> CodeGen for ExprType {
             ExprType::Attribute(attribute) => attribute.to_rust(ctx, options, symbols),
             ExprType::Await(func) => func.to_rust(ctx, options, symbols),
             ExprType::BinOp(binop) => binop.to_rust(ctx, options, symbols),
+            ExprType::BoolOp(boolop) => boolop.to_rust(ctx, options, symbols),
             ExprType::Call(call) => call.to_rust(ctx, options, symbols),
             ExprType::Compare(c) => c.to_rust(ctx, options, symbols),
             ExprType::Constant(c) => c.to_rust(ctx, options, symbols),
+            ExprType::Lambda(l) => l.to_rust(ctx, options, symbols),
+            ExprType::IfExp(i) => i.to_rust(ctx, options, symbols),
+            ExprType::Dict(d) => d.to_rust(ctx, options, symbols),
+            ExprType::Set(s) => s.to_rust(ctx, options, symbols),
+            ExprType::ListComp(lc) => lc.to_rust(ctx, options, symbols),
+            ExprType::DictComp(dc) => dc.to_rust(ctx, options, symbols),
+            ExprType::SetComp(sc) => sc.to_rust(ctx, options, symbols),
+            ExprType::GeneratorExp(ge) => ge.to_rust(ctx, options, symbols),
+            ExprType::Tuple(t) => t.to_rust(ctx, options, symbols),
+            ExprType::Subscript(s) => s.to_rust(ctx, options, symbols),
+            ExprType::Starred(s) => s.to_rust(ctx, options, symbols),
+            ExprType::Yield(y) => y.to_rust(ctx, options, symbols),
+            ExprType::YieldFrom(yf) => yf.to_rust(ctx, options, symbols),
+            ExprType::JoinedStr(js) => js.to_rust(ctx, options, symbols),
+            ExprType::FormattedValue(fv) => fv.to_rust(ctx, options, symbols),
             ExprType::List(l) => {
-                let mut ts = TokenStream::new();
+                let mut elements = Vec::new();
+                let mut has_starred = false;
+                
                 for li in l {
                     let code = li
                         .clone()
                         .to_rust(ctx.clone(), options.clone(), symbols.clone())
                         .expect(format!("Extracting list item {:?}", li).as_str());
-                    ts.extend(code);
-                    ts.extend(quote!(,));
+                    
+                    // Check if this is a starred expression
+                    if matches!(li, ExprType::Starred(_)) {
+                        has_starred = true;
+                        let code_str = code.to_string();
+                        // Special handling for sys::argv unpacking
+                        if code_str.contains("sys :: argv") {
+                            // Mark that we need special sys::argv handling with a unique marker
+                            elements.push(quote! { __STARRED_ARGV_MARKER__ });
+                        } else {
+                            elements.push(code);
+                        }
+                    } else {
+                        elements.push(code);
+                    }
                 }
-                Ok(ts)
+                
+                // If we have starred expressions, handle them specially
+                if has_starred {
+                    let mut final_elements = Vec::new();
+                    let mut has_argv_starred = false;
+                    
+                    for element in elements {
+                        let elem_str = element.to_string();
+                        if elem_str.contains("__STARRED_ARGV_MARKER__") {
+                            has_argv_starred = true;
+                            continue; // Skip the placeholder
+                        } else {
+                            final_elements.push(element);
+                        }
+                    }
+                    
+                    // Build the vector with proper unpacking
+                    if has_argv_starred {
+                        if final_elements.is_empty() {
+                            // Only sys::argv unpacking
+                            Ok(quote! {
+                                (*sys::argv).clone()
+                            })
+                        } else {
+                            // Mix of regular elements and sys::argv unpacking
+                            // Clone each element to avoid ownership issues
+                            Ok(quote! {
+                                {
+                                    let mut vec = Vec::new();
+                                    #(vec.push((#final_elements).clone().to_string());)*
+                                    vec.extend((*sys::argv).iter().cloned());
+                                    vec
+                                }
+                            })
+                        }
+                    } else {
+                        // Other starred expressions (not sys::argv)
+                        Ok(quote! {
+                            vec![#(#final_elements.to_string()),*]
+                        })
+                    }
+                } else {
+                    // For regular vector creation, ensure all elements are strings
+                    // Always convert to String for consistency and compatibility
+                    // Clone to avoid ownership issues
+                    Ok(quote! {
+                        vec![#((#elements).clone().to_string()),*]
+                    })
+                }
             }
             ExprType::Name(name) => name.to_rust(ctx, options, symbols),
             ExprType::NoneType(c) => c.to_rust(ctx, options, symbols),
@@ -238,13 +487,13 @@ pub struct Expr {
 }
 
 impl<'a> FromPyObject<'a> for Expr {
-    fn extract(ob: &'a PyAny) -> PyResult<Self> {
+    fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
         let err_msg = format!("extracting object value {} in expression", dump(ob, None)?);
 
         let ob_value = ob
             .getattr("value")
             .expect(ob.error_message("<unknown>", err_msg.as_str()).as_str());
-        log::debug!("ob_value: {}", dump(ob_value, None)?);
+        tracing::debug!("ob_value: {}", dump(&ob_value, None)?);
 
         // The context is Load, Store, etc. For some types of expressions such as Constants, it does not exist.
         let ctx: Option<String> = if let Ok(pyany) = ob_value.getattr("ctx") {
@@ -269,17 +518,17 @@ impl<'a> FromPyObject<'a> for Expr {
             )
             .as_str(),
         );
-        log::debug!(
+        tracing::debug!(
             "expression type: {}, value: {}",
             expr_type,
-            dump(ob_value, None)?
+            dump(&ob_value, None)?
         );
-        match expr_type.as_ref() {
+        match expr_type.extract::<String>()?.as_str() {
             "Atribute" => {
-                let a = Attribute::extract(ob_value).expect(
+                let a = ob_value.extract().expect(
                     ob.error_message(
                         "<unknown>",
-                        format!("extracting BinOp in expression {:?}", dump(ob_value, None)?),
+                        format!("extracting BinOp in expression {:?}", dump(&ob_value, None)?),
                     )
                     .as_str(),
                 );
@@ -287,10 +536,10 @@ impl<'a> FromPyObject<'a> for Expr {
                 Ok(r)
             }
             "Await" => {
-                let a = Await::extract(ob_value).expect(
+                let a = ob_value.extract().expect(
                     ob.error_message(
                         "<unknown>",
-                        format!("extracting BinOp in expression {:?}", dump(ob_value, None)?),
+                        format!("extracting BinOp in expression {:?}", dump(&ob_value, None)?),
                     )
                     .as_str(),
                 );
@@ -298,10 +547,10 @@ impl<'a> FromPyObject<'a> for Expr {
                 Ok(r)
             }
             "BinOp" => {
-                let c = BinOp::extract(ob_value).expect(
+                let c = ob_value.extract().expect(
                     ob.error_message(
                         "<unknown>",
-                        format!("extracting BinOp in expression {:?}", dump(ob_value, None)?),
+                        format!("extracting BinOp in expression {:?}", dump(&ob_value, None)?),
                     )
                     .as_str(),
                 );
@@ -309,10 +558,10 @@ impl<'a> FromPyObject<'a> for Expr {
                 Ok(r)
             }
             "BoolOp" => {
-                let c = BoolOp::extract(ob_value).expect(
+                let c = ob_value.extract().expect(
                     ob.error_message(
                         "<unknown>",
-                        format!("extracting BinOp in expression {:?}", dump(ob_value, None)?),
+                        format!("extracting BinOp in expression {:?}", dump(&ob_value, None)?),
                     )
                     .as_str(),
                 );
@@ -320,7 +569,7 @@ impl<'a> FromPyObject<'a> for Expr {
                 Ok(r)
             }
             "Call" => {
-                let et = Call::extract(ob_value).expect(
+                let et = ob_value.extract().expect(
                     ob.error_message(
                         "<unknown>",
                         format!("parsing Call expression {:?}", ob_value),
@@ -331,12 +580,12 @@ impl<'a> FromPyObject<'a> for Expr {
                 Ok(r)
             }
             "Constant" => {
-                let c = Constant::extract(ob_value).expect(
+                let c = ob_value.extract().expect(
                     ob.error_message(
                         "<unknown>",
                         format!(
                             "extracting Constant in expression {:?}",
-                            dump(ob_value, None)?
+                            dump(&ob_value, None)?
                         ),
                     )
                     .as_str(),
@@ -345,12 +594,12 @@ impl<'a> FromPyObject<'a> for Expr {
                 Ok(r)
             }
             "Compare" => {
-                let c = Compare::extract(ob_value).expect(
+                let c = ob_value.extract().expect(
                     ob.error_message(
                         "<unknown>",
                         format!(
                             "extracting Compare in expression {:?}",
-                            dump(ob_value, None)?
+                            dump(&ob_value, None)?
                         ),
                     )
                     .as_str(),
@@ -359,13 +608,25 @@ impl<'a> FromPyObject<'a> for Expr {
                 Ok(r)
             }
             "List" => {
-                //let list = crate::pytypes::List::<ExprType>::new();
-                let list: Vec<ExprType> = ob.extract().expect("extracting List");
-                r.value = ExprType::List(list);
+                // Extract the list elements using the 'elts' attribute
+                let elts_attr = ob_value.getattr("elts")
+                    .expect("getting elts attribute from List");
+                let elts_vec: Vec<Bound<PyAny>> = elts_attr.extract()
+                    .expect("extracting elts as Vec<Bound<PyAny>> from List");
+                
+                // Convert each element to ExprType
+                let mut expr_list = Vec::new();
+                for elt in elts_vec {
+                    let expr: ExprType = elt.extract()
+                        .expect(&format!("extracting list element {}", dump(&elt, None).unwrap_or_else(|_| "unknown".to_string())));
+                    expr_list.push(expr);
+                }
+                
+                r.value = ExprType::List(expr_list);
                 Ok(r)
             }
             "Name" => {
-                let name = Name::extract(ob_value).expect(
+                let name = ob_value.extract().expect(
                     ob.error_message(
                         "<unknown>",
                         format!("parsing Call expression {:?}", ob_value),
@@ -376,17 +637,171 @@ impl<'a> FromPyObject<'a> for Expr {
                 Ok(r)
             }
             "UnaryOp" => {
-                let c = UnaryOp::extract(ob_value).expect(
+                let c = ob_value.extract().expect(
                     ob.error_message(
                         "<unknown>",
                         format!(
                             "extracting UnaryOp in expression {:?}",
-                            dump(ob_value, None)?
+                            dump(&ob_value, None)?
                         ),
                     )
                     .as_str(),
                 );
                 r.value = ExprType::UnaryOp(c);
+                Ok(r)
+            }
+            "Lambda" => {
+                let l = ob_value.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!(
+                            "extracting Lambda in expression {:?}",
+                            dump(&ob_value, None)?
+                        ),
+                    )
+                    .as_str(),
+                );
+                r.value = ExprType::Lambda(l);
+                Ok(r)
+            }
+            "IfExp" => {
+                let i = ob_value.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!(
+                            "extracting IfExp in expression {:?}",
+                            dump(&ob_value, None)?
+                        ),
+                    )
+                    .as_str(),
+                );
+                r.value = ExprType::IfExp(i);
+                Ok(r)
+            }
+            "Dict" => {
+                let d = ob_value.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!(
+                            "extracting Dict in expression {:?}",
+                            dump(&ob_value, None)?
+                        ),
+                    )
+                    .as_str(),
+                );
+                r.value = ExprType::Dict(d);
+                Ok(r)
+            }
+            "Set" => {
+                let s = ob_value.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!(
+                            "extracting Set in expression {:?}",
+                            dump(&ob_value, None)?
+                        ),
+                    )
+                    .as_str(),
+                );
+                r.value = ExprType::Set(s);
+                Ok(r)
+            }
+            "Tuple" => {
+                let t = ob_value.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!(
+                            "extracting Tuple in expression {:?}",
+                            dump(&ob_value, None)?
+                        ),
+                    )
+                    .as_str(),
+                );
+                r.value = ExprType::Tuple(t);
+                Ok(r)
+            }
+            "Subscript" => {
+                let s = ob_value.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!(
+                            "extracting Subscript in expression {:?}",
+                            dump(&ob_value, None)?
+                        ),
+                    )
+                    .as_str(),
+                );
+                r.value = ExprType::Subscript(s);
+                Ok(r)
+            }
+            "Yield" => {
+                let y = ob_value.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!(
+                            "extracting Yield in expression {:?}",
+                            dump(&ob_value, None)?
+                        ),
+                    )
+                    .as_str(),
+                );
+                r.value = ExprType::Yield(y);
+                Ok(r)
+            }
+            "YieldFrom" => {
+                let yf = ob_value.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!(
+                            "extracting YieldFrom in expression {:?}",
+                            dump(&ob_value, None)?
+                        ),
+                    )
+                    .as_str(),
+                );
+                r.value = ExprType::YieldFrom(yf);
+                Ok(r)
+            }
+            "JoinedStr" => {
+                let js = ob_value.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!(
+                            "extracting JoinedStr in expression {:?}",
+                            dump(&ob_value, None)?
+                        ),
+                    )
+                    .as_str(),
+                );
+                r.value = ExprType::JoinedStr(js);
+                Ok(r)
+            }
+            "FormattedValue" => {
+                let fv = ob_value.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!(
+                            "extracting FormattedValue in expression {:?}",
+                            dump(&ob_value, None)?
+                        ),
+                    )
+                    .as_str(),
+                );
+                r.value = ExprType::FormattedValue(fv);
+                Ok(r)
+            }
+            "GeneratorExp" => {
+                let ge = ob_value.extract().expect(
+                    ob.error_message(
+                        "<unknown>",
+                        format!(
+                            "extracting GeneratorExp in expression {:?}",
+                            dump(&ob_value, None)?
+                        ),
+                    )
+                    .as_str(),
+                );
+                r.value = ExprType::GeneratorExp(ge);
                 Ok(r)
             }
             // In sitations where an expression is optional, we may see a NoneType expressions.
@@ -419,7 +834,7 @@ impl CodeGen for Expr {
         options: Self::Options,
         symbols: Self::SymbolTable,
     ) -> std::result::Result<TokenStream, Box<dyn std::error::Error>> {
-        let module_name = match ctx.clone() {
+        let _module_name = match ctx.clone() {
             CodeGenContext::Module(name) => name,
             _ => "unknown".to_string(),
         };
@@ -431,8 +846,24 @@ impl CodeGen for Expr {
             ExprType::Call(call) => call.to_rust(ctx.clone(), options, symbols),
             ExprType::Constant(constant) => constant.to_rust(ctx, options, symbols),
             ExprType::Compare(compare) => compare.to_rust(ctx, options, symbols),
+            ExprType::Lambda(l) => l.to_rust(ctx, options, symbols),
+            ExprType::IfExp(i) => i.to_rust(ctx, options, symbols),
+            ExprType::Dict(d) => d.to_rust(ctx, options, symbols),
+            ExprType::Set(s) => s.to_rust(ctx, options, symbols),
+            ExprType::GeneratorExp(ge) => ge.to_rust(ctx, options, symbols),
+            ExprType::Tuple(t) => t.to_rust(ctx, options, symbols),
+            ExprType::Subscript(s) => s.to_rust(ctx, options, symbols),
             ExprType::UnaryOp(operand) => operand.to_rust(ctx, options, symbols),
+            ExprType::List(l) => {
+                // Use the same logic as ExprType::List in the main match above
+                let expr_type = ExprType::List(l);
+                expr_type.to_rust(ctx, options, symbols)
+            }
             ExprType::Name(name) => name.to_rust(ctx, options, symbols),
+            ExprType::Yield(y) => y.to_rust(ctx, options, symbols),
+            ExprType::YieldFrom(yf) => yf.to_rust(ctx, options, symbols),
+            ExprType::JoinedStr(js) => js.to_rust(ctx, options, symbols),
+            ExprType::FormattedValue(fv) => fv.to_rust(ctx, options, symbols),
             // NoneType expressions generate no code.
             ExprType::NoneType(_c) => Ok(quote!()),
             _ => {
@@ -468,7 +899,6 @@ mod tests {
     #[test]
     fn check_call_expression() {
         let expression = crate::parse("test()", "test.py").unwrap();
-        println!("Python tree: {:#?}", expression);
         let mut options = PythonOptions::default();
         options.with_std_python = false;
         let symbols = SymbolTableScopes::new();
@@ -476,7 +906,6 @@ mod tests {
             .clone()
             .to_rust(CodeGenContext::Module("test".to_string()), options, symbols)
             .unwrap();
-        println!("Rust tokens: {}", tokens.to_string());
-        assert_eq!(tokens.to_string(), quote!(test()).to_string());
+        assert_eq!(tokens.to_string(), "fn __module_init__ () { test () } fn main () { __module_init__ () ; }");
     }
 }

@@ -1,5 +1,5 @@
 use proc_macro2::TokenStream;
-use pyo3::{FromPyObject, PyAny, PyResult};
+use pyo3::{Bound, FromPyObject, PyAny, PyResult, prelude::PyAnyMethods, types::PyTypeMethods};
 use quote::quote;
 use serde::{Deserialize, Serialize};
 
@@ -15,11 +15,26 @@ pub enum BoolOps {
 }
 
 impl<'a> FromPyObject<'a> for BoolOps {
-    fn extract(ob: &'a PyAny) -> PyResult<Self> {
-        let err_msg = format!("Unimplemented unary op {}", dump(ob, None)?);
-        Err(pyo3::exceptions::PyValueError::new_err(
-            ob.error_message("<unknown>", err_msg),
-        ))
+    fn extract_bound(ob: &Bound<'a, PyAny>) -> PyResult<Self> {
+        let op_type = ob.get_type().name().expect(
+            ob.error_message(
+                "<unknown>",
+                format!("extracting type name {:?} for boolean operator", ob),
+            )
+            .as_str(),
+        );
+
+        let op_type_str: String = op_type.extract()?;
+        let op = match op_type_str.as_str() {
+            "And" => BoolOps::And,
+            "Or" => BoolOps::Or,
+            _ => {
+                tracing::debug!("Found unknown BoolOp {:?}", op_type_str);
+                BoolOps::Unknown
+            }
+        };
+
+        Ok(op)
     }
 }
 
@@ -31,8 +46,8 @@ pub struct BoolOp {
 }
 
 impl<'a> FromPyObject<'a> for BoolOp {
-    fn extract(ob: &'a PyAny) -> PyResult<Self> {
-        log::debug!("ob: {}", dump(ob, None)?);
+    fn extract_bound(ob: &Bound<'a, PyAny>) -> PyResult<Self> {
+        tracing::debug!("ob: {}", dump(ob, None)?);
         let op = ob.getattr("op").expect(
             ob.error_message("<unknown>", "error getting unary operator")
                 .as_str(),
@@ -51,23 +66,24 @@ impl<'a> FromPyObject<'a> for BoolOp {
                 .as_str(),
         );
 
-        println!("BoolOps values: {}", dump(values, None)?);
+        tracing::debug!("BoolOps values: {}", dump(&values, None)?);
 
         let value: Vec<ExprType> = values.extract().expect("getting values from BoolOp");
         let left = value[0].clone();
         let right = value[1].clone();
 
-        let op = match op_type.as_ref() {
+        let op_type_str: String = op_type.extract()?;
+        let op = match op_type_str.as_str() {
             "And" => BoolOps::And,
             "Or" => BoolOps::Or,
 
             _ => {
-                log::debug!("Found unknown BoolOp {:?}", op);
+                tracing::debug!("Found unknown BoolOp {:?}", op);
                 BoolOps::Unknown
             }
         };
 
-        log::debug!(
+        tracing::debug!(
             "left: {:?}, right: {:?}, op: {:?}/{:?}",
             left,
             right,
@@ -102,9 +118,28 @@ impl<'a> CodeGen for BoolOp {
             .right
             .clone()
             .to_rust(ctx.clone(), options.clone(), symbols.clone())?;
+            
+        // Python's boolean operators are different from Rust's - they return operands, not booleans
+        // For now, we'll use a simplified approach that works for common cases
+        let right_str = right.to_string();
+        
         match self.op {
-            BoolOps::Or => Ok(quote!((#left) || (#right))),
-            BoolOps::And => Ok(quote!((#left) && (#right))),
+            BoolOps::Or => {
+                if right_str.trim() == "None" {
+                    // Special case for `x or None` - just return the left operand
+                    // This avoids the type mismatch error with || None
+                    Ok(quote!(#left))
+                } else {
+                    // Use simple boolean OR for other cases
+                    // TODO: Implement proper Python `or` semantics
+                    Ok(quote!((#left) || (#right)))
+                }
+            },
+            BoolOps::And => {
+                // Use simple boolean AND
+                // TODO: Implement proper Python `and` semantics
+                Ok(quote!((#left) && (#right)))
+            },
 
             _ => Err(Error::BoolOpNotYetImplemented(self).into()),
         }
@@ -119,8 +154,8 @@ mod tests {
     fn test_and() {
         let options = PythonOptions::default();
         let result = crate::parse("1 and 2", "test_case.py").unwrap();
-        log::info!("Python tree: {:?}", result);
-        //log::info!("{}", result.to_rust().unwrap());
+        tracing::info!("Python tree: {:?}", result);
+        //tracing::info!("{}", result.to_rust().unwrap());
 
         let code = result
             .to_rust(
@@ -129,15 +164,15 @@ mod tests {
                 SymbolTableScopes::new(),
             )
             .unwrap();
-        log::info!("module: {:?}", code);
+        tracing::info!("module: {:?}", code);
     }
 
     #[test]
     fn test_or() {
         let options = PythonOptions::default();
         let result = crate::parse("1 or 2", "test_case.py").unwrap();
-        log::info!("Python tree: {:?}", result);
-        //log::info!("{}", result);
+        tracing::info!("Python tree: {:?}", result);
+        //tracing::info!("{}", result);
 
         let code = result
             .to_rust(
@@ -146,6 +181,6 @@ mod tests {
                 SymbolTableScopes::new(),
             )
             .unwrap();
-        log::info!("module: {:?}", code);
+        tracing::info!("module: {:?}", code);
     }
 }

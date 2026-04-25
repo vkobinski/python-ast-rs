@@ -1,4 +1,3 @@
-#![feature(strict_provenance)]
 #[doc = include_str!("../README.md")]
 pub mod ast;
 pub use ast::*;
@@ -27,3 +26,11 @@ pub use result::*;
 
 pub mod datamodel;
 pub use datamodel::*;
+
+pub mod macros;
+
+pub mod traits;
+pub use traits::*;
+
+pub mod parser_utils;
+pub use parser_utils::*;

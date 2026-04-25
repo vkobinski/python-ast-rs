@@ -1,5 +1,5 @@
 use proc_macro2::TokenStream;
-use pyo3::{FromPyObject, PyAny};
+use pyo3::{Bound, FromPyObject, PyAny, types::PyAnyMethods};
 use quote::quote;
 
 use crate::{dump, CodeGen, CodeGenContext, PythonOptions, SymbolTableScopes};
@@ -9,10 +9,27 @@ use crate::{dump, CodeGen, CodeGenContext, PythonOptions, SymbolTableScopes};
 // consistency, we're using the same type as we use to model
 pub type ListContents = crate::pytypes::List<dyn CodeGen>;
 
-#[derive(Clone, Debug, Default, FromPyObject)]
+#[derive(Clone, Default)]
 pub struct List<'a> {
-    pub elts: Vec<&'a PyAny>,
+    pub elts: Vec<Bound<'a, PyAny>>,
     pub ctx: Option<String>,
+}
+
+impl std::fmt::Debug for List<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("List")
+            .field("elts", &format!("Vec<Bound<PyAny>> (len: {})", self.elts.len()))
+            .field("ctx", &self.ctx)
+            .finish()
+    }
+}
+
+impl<'a> FromPyObject<'a> for List<'a> {
+    fn extract_bound(ob: &Bound<'a, PyAny>) -> pyo3::PyResult<Self> {
+        let elts: Vec<Bound<'a, PyAny>> = ob.getattr("elts")?.extract()?;
+        let ctx: Option<String> = ob.getattr("ctx").ok().and_then(|v| v.extract().ok());
+        Ok(List { elts, ctx })
+    }
 }
 
 impl<'a> CodeGen for List<'a> {
@@ -22,18 +39,70 @@ impl<'a> CodeGen for List<'a> {
 
     fn to_rust(
         self,
-        _ctx: Self::Context,
-        _options: Self::Options,
-        _symbols: Self::SymbolTable,
+        ctx: Self::Context,
+        options: Self::Options,
+        symbols: Self::SymbolTable,
     ) -> Result<TokenStream, Box<dyn std::error::Error>> {
-        let ts = TokenStream::new();
-        log::debug!("================self:{:#?}", self);
+        use crate::ExprType;
+        
+        let mut elements = Vec::new();
+        let mut has_starred = false;
+        
+        tracing::debug!("================Processing list with {} elements", self.elts.len());
         for elt in self.elts {
-            let el: &PyAny = elt.extract()?;
-            log::debug!("elt: {}", dump(el, None)?);
-            //ts.extend(elt.to_rust(ctx, options).expect("parsing list element"))
+            tracing::debug!("elt: {}", dump(&elt, None)?);
+            
+            // Extract the element as ExprType and convert to Rust
+            let expr: ExprType = elt.extract()?;
+            
+            // Check if this is a starred expression
+            match &expr {
+                ExprType::Starred(_) => {
+                    has_starred = true;
+                    let rust_code = expr.to_rust(ctx.clone(), options.clone(), symbols.clone())?;
+                    let rust_str = rust_code.to_string();
+                    
+                    // If it's a starred sys::argv, we need special handling
+                    if rust_str.contains("sys :: argv") {
+                        // Instead of adding individual elements, we'll build the vector differently
+                        elements.push(quote! { /* STARRED_ARGV */ });
+                    } else {
+                        elements.push(rust_code);
+                    }
+                }
+                _ => {
+                    let rust_code = expr.to_rust(ctx.clone(), options.clone(), symbols.clone())?;
+                    elements.push(rust_code);
+                }
+            }
         }
-        Ok(quote!(vec![#ts]))
+        
+        // If we have starred expressions, especially sys::argv, handle it specially
+        if has_starred && elements.iter().any(|e| e.to_string().contains("STARRED_ARGV")) {
+            // Create a special vector construction that handles sys::argv unpacking
+            let mut final_elements = Vec::new();
+            for element in elements {
+                let elem_str = element.to_string();
+                if elem_str.contains("STARRED_ARGV") {
+                    // Skip the placeholder and add the argv unpacking
+                    continue;
+                } else {
+                    final_elements.push(element);
+                }
+            }
+            
+            // Build the vector with sys::argv unpacking
+            Ok(quote! {
+                {
+                    let mut vec = Vec::new();
+                    #(vec.push(#final_elements);)*
+                    vec.extend((*sys::argv).iter().cloned());
+                    vec
+                }
+            })
+        } else {
+            Ok(quote!(/* LIST_GENERATED */ vec![#(#elements),*]))
+        }
     }
 }
 
@@ -53,7 +122,7 @@ mod tests {
         match statement {
             StatementType::Expr(e) => match e.value {
                 ExprType::List(list) => {
-                    log::debug!("{:#?}", list);
+                    tracing::debug!("{:#?}", list);
                     assert_eq!(list.len(), 3);
                 }
                 _ => panic!("Could not find inner expression"),

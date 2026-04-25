@@ -1,5 +1,5 @@
 use proc_macro2::TokenStream;
-use pyo3::{FromPyObject, PyAny, PyResult};
+use pyo3::{Bound, FromPyObject, PyAny, PyResult, prelude::PyAnyMethods, types::PyTypeMethods};
 use quote::quote;
 use serde::{Deserialize, Serialize};
 
@@ -24,7 +24,7 @@ pub enum Compares {
 }
 
 impl<'a> FromPyObject<'a> for Compares {
-    fn extract(ob: &'a PyAny) -> PyResult<Self> {
+    fn extract_bound(ob: &Bound<'a, PyAny>) -> PyResult<Self> {
         let err_msg = format!("Unimplemented unary op {}", dump(ob, None)?);
         Err(pyo3::exceptions::PyValueError::new_err(
             ob.error_message("<unknown>", err_msg),
@@ -40,11 +40,11 @@ pub struct Compare {
 }
 
 impl<'a> FromPyObject<'a> for Compare {
-    fn extract(ob: &'a PyAny) -> PyResult<Self> {
-        log::debug!("ob: {}", dump(ob, None)?);
+    fn extract_bound(ob: &Bound<'a, PyAny>) -> PyResult<Self> {
+        tracing::debug!("ob: {}", dump(ob, None)?);
 
         // Python allows for multiple comparators, rust we only supports one, so we have to rewrite the comparison a little.
-        let ops: Vec<&PyAny> = ob
+        let ops_bound: Vec<Bound<PyAny>> = ob
             .getattr("ops")
             .expect(
                 ob.error_message("<unknown>", "error getting unary operator")
@@ -55,16 +55,17 @@ impl<'a> FromPyObject<'a> for Compare {
 
         let mut op_list = Vec::new();
 
-        for op in ops.iter() {
+        for op in ops_bound.iter() {
             let op_type = op.get_type().name().expect(
                 ob.error_message(
                     "<unknown>",
-                    format!("extracting type name {:?} for binary operator", op),
+                    "error extracting type name for binary operator",
                 )
                 .as_str(),
             );
 
-            let op = match op_type.as_ref() {
+            let op_type_str: String = op_type.extract()?;
+            let op = match op_type_str.as_str() {
                 "Eq" => Compares::Eq,
                 "NotEq" => Compares::NotEq,
                 "Lt" => Compares::Lt,
@@ -77,7 +78,7 @@ impl<'a> FromPyObject<'a> for Compare {
                 "NotIn" => Compares::NotIn,
 
                 _ => {
-                    log::debug!("Found unknown Compare {:?}", op);
+                    tracing::debug!("Found unknown Compare with type: {}", op_type_str);
                     Compares::Unknown
                 }
             };
@@ -93,18 +94,18 @@ impl<'a> FromPyObject<'a> for Compare {
             ob.error_message("<unknown>", "error getting compoarator")
                 .as_str(),
         );
-        log::debug!(
+        tracing::debug!(
             "left: {}, comparators: {}",
-            dump(left, None)?,
-            dump(comparators, None)?
+            dump(&left, None)?,
+            dump(&comparators, None)?
         );
 
-        let left = ExprType::extract(left).expect("getting binary operator operand");
+        let left = left.extract().expect("getting binary operator operand");
         let comparators: Vec<ExprType> = comparators
             .extract()
             .expect("getting comparators from Compare");
 
-        log::debug!(
+        tracing::debug!(
             "left: {:?}, comparators: {:?}, op: {:?}",
             left,
             comparators,
@@ -146,16 +147,16 @@ impl CodeGen for Compare {
                 .clone()
                 .to_rust(ctx.clone(), options.clone(), symbols.clone())?;
             let tokens = match op {
-                Compares::Eq => quote!(((#left) == (#comparator))),
-                Compares::NotEq => quote!(((#left) != (#comparator))),
-                Compares::Lt => quote!(((#left) < (#comparator))),
-                Compares::LtE => quote!(((#left) <= (#comparator))),
-                Compares::Gt => quote!(((#left) > (#comparator))),
-                Compares::GtE => quote!(((#left) >= (#comparator))),
-                Compares::Is => quote!((&(#left) == &(#comparator))),
-                Compares::IsNot => quote!((&(#left) != &(#comparator))),
-                Compares::In => quote!(((#comparator).get(#left) == Some(_))),
-                Compares::NotIn => quote!(((#comparator).get(#left) == None)),
+                Compares::Eq => quote!((#left) == (#comparator)),
+                Compares::NotEq => quote!((#left) != (#comparator)),
+                Compares::Lt => quote!((#left) < (#comparator)),
+                Compares::LtE => quote!((#left) <= (#comparator)),
+                Compares::Gt => quote!((#left) > (#comparator)),
+                Compares::GtE => quote!((#left) >= (#comparator)),
+                Compares::Is => quote!(&#left == &#comparator),
+                Compares::IsNot => quote!(&#left != &#comparator),
+                Compares::In => quote!((#comparator).get(#left) == Some(_)),
+                Compares::NotIn => quote!((#comparator).get(#left) == None),
 
                 _ => return Err(Error::CompareNotYetImplemented(self).into()),
             };
@@ -179,7 +180,7 @@ mod tests {
     fn test_simple_eq() {
         let options = PythonOptions::default();
         let result = crate::parse("1 == 2", "test_case.py").unwrap();
-        log::info!("Python tree: {:?}", result);
+        tracing::info!("Python tree: {:?}", result);
         //info!("{}", result);
 
         let code = result.to_rust(
@@ -187,14 +188,14 @@ mod tests {
             options,
             SymbolTableScopes::new(),
         );
-        log::info!("module: {:?}", code);
+        tracing::info!("module: {:?}", code);
     }
 
     #[test]
     fn test_complex_compare() {
         let options = PythonOptions::default();
         let result = crate::parse("1 < a > 6", "test_case.py").unwrap();
-        log::info!("Python tree: {:?}", result);
+        tracing::info!("Python tree: {:?}", result);
         //info!("{}", result);
 
         let code = result.to_rust(
@@ -202,6 +203,6 @@ mod tests {
             options,
             SymbolTableScopes::new(),
         );
-        log::info!("module: {:?}", code);
+        tracing::info!("module: {:?}", code);
     }
 }
